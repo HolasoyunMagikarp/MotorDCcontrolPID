@@ -14,13 +14,13 @@ const float pulsesPerRevolution = 1.0;     // Pulsos por revolución (ajustar se
 const float gearRatio = 1.0;               // Relación de engranaje (si aplica)
 
 // PID Variables
-float Kp = 1.0, Ki = 0.00, Kd = 0.0;       // Ganancias del controlador PID
-float setpoint = 120.0;                    // Velocidad deseada (RPM)
+float Kp = 1.0, Ki = 0.005, Kd = 0.05;       // Ganancias del controlador PID
+float setpoint = 80.0;                     // Velocidad deseada (RPM)
 float error, lastError = 0, integral = 0, derivative, output;
 
 // Control de tiempo
 unsigned long lastTime = 0;                // Tiempo del último cálculo del PID
-unsigned long lastSerialTime = 0;          // Control de impresión en el monitor serie
+unsigned long lastSerialTime = 0;          // Tiempo del último debug
 
 // Setup
 void setup() {
@@ -45,13 +45,23 @@ void loop() {
   unsigned long currentTime = millis();
   float deltaTime = (currentTime - lastTime) / 1000.0; // Tiempo en segundos
 
+  // **Cambia dinámicamente el setpoint**
+  if (currentTime % 5000 < 2500) {
+    setpoint = 60.0;  // Velocidad deseada durante los primeros 2.5 segundos
+  } else {
+    setpoint = 100.0;  // Cambia a un setpoint más alto
+  }
+
+  // Asegura que RPM no sea negativa
+  currentRPM = max(currentRPM, 0);
+
   if (deltaTime >= 0.1) {  // Realiza el cálculo cada 100 ms
     // Cálculo del error
     error = setpoint - currentRPM;
 
     // Término Integral (con limitación para evitar "windup")
     integral += error * deltaTime;
-    integral = constrain(integral, -50, 50);  // Ajustar los límites según tu sistema
+    integral = constrain(integral, -50, 50);
 
     // Término Derivativo
     derivative = (error - lastError) / deltaTime;
@@ -72,7 +82,7 @@ void loop() {
   if (currentTime - lastSerialTime >= 500) {
     Serial.print("Setpoint: "); Serial.print(setpoint);
     Serial.print(" RPM | Current RPM: "); Serial.print(currentRPM);
-    Serial.print(" | Pulses: "); Serial.print(pulseCount); // Depuración
+    Serial.print(" | Pulses: "); Serial.print(pulseCount); // Para depuración
     Serial.print(" | Output: "); Serial.println(output);
     lastSerialTime = currentTime;
   }
@@ -83,7 +93,7 @@ void readSensorPulse() {
   unsigned long currentTime = micros(); // Tiempo actual en microsegundos
   unsigned long pulseDuration = currentTime - lastPulseTime;
 
-  // Verifica que el pulso sea válido (sin debounce estricto)
+  // Evita pulsos muy rápidos (debounce)
   if (pulseDuration > 1000) { // Ignora interrupciones menores a 1 ms
     if (pulseDuration > 0) {
       // Calcula la velocidad en RPM
