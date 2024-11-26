@@ -1,74 +1,86 @@
 // Pines
-const int motorPWM = 9;        // Pin PWM para controlar el motor
-const int encoderA = 2;        // Pin del canal A del encoder
-const int encoderB = 3;        // Pin del canal B del encoder
+const int motorPWM = 9;        // Pin PWM para controlar la velocidad del motor
+const int motorIN1 = 7;        // Pin para IN1 del L298N
+const int motorIN2 = 8;        // Pin para IN2 del L298N
+const int sensorPin = 2;       // Pin para el sensor de velocidad (interrupción)
 
-// Variables del encoder
-volatile long encoderCount = 0;  // Cuenta de pulsos del encoder
-int lastEncoderCount = 0;        // Para calcular la velocidad
-unsigned long lastTime = 0;      // Tiempo anterior
-float velocity = 0;              // Velocidad angular (rad/s)
+// Variables del sensor
+volatile unsigned long lastPulseTime = 0;  // Marca de tiempo del último pulso
+volatile float currentRPM = 0;             // Velocidad medida en RPM
 
 // Parámetros del motor
-const int PPR = 200;             // Pulsos por revolución del encoder
-const float gearRatio = 1.0;     // Relación de engranaje si aplica
-const float timeInterval = 100;  // Intervalo de tiempo para cálculo (ms)
+const float pulsesPerRevolution = 1.0;     // Pulsos por revolución (ajustar según el sensor)
+const float gearRatio = 1.0;               // Relación de engranaje (si aplica)
 
 // PID Variables
-float Kp = 2.0, Ki = 0.5, Kd = 0.1;  // Ganancias del controlador
-float setpoint = 50.0;               // Velocidad deseada (rad/s)
+float Kp = 1.0, Ki = 0.00, Kd = 0.0;       // Ganancias del controlador PID
+float setpoint = 50.0;                     // Velocidad deseada (RPM)
 float error, lastError = 0, integral = 0, derivative, output;
+
+// Control de tiempo
+unsigned long lastTime = 0;                // Tiempo del último cálculo del PID
 
 // Setup
 void setup() {
   pinMode(motorPWM, OUTPUT);
-  pinMode(encoderA, INPUT_PULLUP);
-  pinMode(encoderB, INPUT_PULLUP);
-  
-  // Interrupciones del encoder
-  attachInterrupt(digitalPinToInterrupt(encoderA), readEncoder, RISING);
-  
+  pinMode(motorIN1, OUTPUT);
+  pinMode(motorIN2, OUTPUT);
+  pinMode(sensorPin, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(sensorPin), readSensorPulse, FALLING);
+
   Serial.begin(9600);
+
+  // Configuración inicial del motor (giro en sentido horario)
+  digitalWrite(motorIN1, HIGH);
+  digitalWrite(motorIN2, LOW);
+
+  Serial.println("Sistema iniciado.");
 }
 
 // Loop principal
 void loop() {
-  // Calcula la velocidad cada 'timeInterval' milisegundos
-  if (millis() - lastTime >= timeInterval) {
-    lastTime = millis();
-    calculateVelocity();
-    
-    // Controlador PID
-    error = setpoint - velocity;
-    integral += error * (timeInterval / 1000.0);
-    derivative = (error - lastError) / (timeInterval / 1000.0);
+  unsigned long currentTime = millis();
+  float deltaTime = (currentTime - lastTime) / 1000.0; // Tiempo en segundos
+
+  if (deltaTime >= 0.1) {  // Realiza el cálculo cada 100 ms
+    // Cálculo del error
+    error = setpoint - currentRPM;
+
+    // Término Integral (con limitación para evitar "windup")
+    integral += error * deltaTime;
+    integral = constrain(integral, -50, 50);  // Ajustar los límites según tu sistema
+
+    // Término Derivativo
+    derivative = (error - lastError) / deltaTime;
+
+    // Cálculo del PID
     output = Kp * error + Ki * integral + Kd * derivative;
-    lastError = error;
+    output = constrain(output, 0, 255);  // Limita la salida al rango PWM
 
-    // Constrain output to PWM range
-    output = constrain(output, 0, 255);
+    // Actualiza el PWM del motor
     analogWrite(motorPWM, (int)output);
-    
-    // Debug
+
+    // Debug en el monitor serie
     Serial.print("Setpoint: "); Serial.print(setpoint);
-    Serial.print(" | Velocity: "); Serial.print(velocity);
+    Serial.print(" RPM | Current RPM: "); Serial.print(currentRPM);
     Serial.print(" | Output: "); Serial.println(output);
+
+    // Actualiza el último error y tiempo
+    lastError = error;
+    lastTime = currentTime;
   }
 }
 
-// Función de interrupción del encoder
-void readEncoder() {
-  int stateB = digitalRead(encoderB);
-  if (stateB == HIGH) {
-    encoderCount++;
-  } else {
-    encoderCount--;
-  }
-}
+// Interrupción del sensor
+void readSensorPulse() {
+  unsigned long currentTime = micros(); // Tiempo actual en microsegundos
+  unsigned long pulseDuration = currentTime - lastPulseTime;
 
-// Calcula la velocidad angular (rad/s)
-void calculateVelocity() {
-  int pulses = encoderCount - lastEncoderCount;
-  lastEncoderCount = encoderCount;
-  velocity = (pulses * 2.0 * PI) / (PPR * gearRatio * (timeInterval / 1000.0));
+  if (pulseDuration > 0) {
+    // Calcula la velocidad en RPM
+    currentRPM = (60.0 * 1000000.0) / (pulseDuration * pulsesPerRevolution * gearRatio);
+  }
+
+  lastPulseTime = currentTime;
 }
